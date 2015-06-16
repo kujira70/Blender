@@ -75,6 +75,7 @@
 #include "BKE_library.h"
 #include "BKE_main.h"
 #include "BKE_packedFile.h"
+#include "BKE_report.h"
 #include "BKE_scene.h"
 #include "BKE_node.h"
 #include "BKE_sequencer.h" /* seq_foreground_frame_get() */
@@ -1016,7 +1017,12 @@ void BKE_image_packfiles(ReportList *reports, Image *ima, const char *basepath)
 		ImagePackedFile *imapf = MEM_mallocN(sizeof(ImagePackedFile), "Image packed file");
 		BLI_addtail(&ima->packedfiles, imapf);
 		imapf->packedfile = newPackedFile(reports, ima->name, basepath);
-		BLI_strncpy(imapf->filepath, ima->name, sizeof(imapf->filepath));
+		if (imapf->packedfile) {
+			BLI_strncpy(imapf->filepath, ima->name, sizeof(imapf->filepath));
+		}
+		else {
+			BLI_freelinkN(&ima->packedfiles, imapf);
+		}
 	}
 	else {
 		ImageView *iv;
@@ -1025,8 +1031,28 @@ void BKE_image_packfiles(ReportList *reports, Image *ima, const char *basepath)
 			BLI_addtail(&ima->packedfiles, imapf);
 
 			imapf->packedfile = newPackedFile(reports, iv->filepath, basepath);
-			BLI_strncpy(imapf->filepath, iv->filepath, sizeof(imapf->filepath));
+			if (imapf->packedfile) {
+				BLI_strncpy(imapf->filepath, iv->filepath, sizeof(imapf->filepath));
+			}
+			else {
+				BLI_freelinkN(&ima->packedfiles, imapf);
+			}
 		}
+	}
+}
+
+void BKE_image_packfiles_from_mem(ReportList *reports, Image *ima, char *data, const size_t data_len)
+{
+	const size_t totfiles = image_num_files(ima);
+
+	if (totfiles != 1) {
+		BKE_report(reports, RPT_ERROR, "Cannot pack multiview images from raw data currently...");
+	}
+	else {
+		ImagePackedFile *imapf = MEM_mallocN(sizeof(ImagePackedFile), __func__);
+		BLI_addtail(&ima->packedfiles, imapf);
+		imapf->packedfile = newPackedFileMemory(data, data_len);
+		BLI_strncpy(imapf->filepath, ima->name, sizeof(imapf->filepath));
 	}
 }
 
@@ -2053,25 +2079,45 @@ void BKE_render_result_stamp_info(Scene *scene, Object *camera, struct RenderRes
 	}
 }
 
+void BKE_stamp_info_callback(void *data, const struct StampData *stamp_data, StampCallback callback)
+{
+	if (!callback || !stamp_data) {
+		return;
+	}
+
+#define CALL(member, value_str) \
+	if (stamp_data->member[0]) { \
+		callback(data, value_str, stamp_data->member); \
+	} ((void)0)
+
+	CALL(file, "File");
+	CALL(note, "Note");
+	CALL(date, "Date");
+	CALL(marker, "Marker");
+	CALL(time, "Time");
+	CALL(frame, "Frame");
+	CALL(camera, "Camera");
+	CALL(cameralens, "Lens");
+	CALL(scene, "Scene");
+	CALL(strip, "Strip");
+	CALL(rendertime, "RenderTime");
+
+#undef CALL
+}
+
+/* wrap for callback only */
+static void metadata_change_field(void *data, const char *propname, const char *propvalue)
+{
+	IMB_metadata_change_field(data, propname, propvalue);
+}
 
 void BKE_imbuf_stamp_info(RenderResult *rr, struct ImBuf *ibuf)
 {
 	struct StampData *stamp_data = rr->stamp_data;
 
-	if (!ibuf || !stamp_data) return;
-
-	if (stamp_data->file[0]) IMB_metadata_change_field(ibuf, "File",        stamp_data->file);
-	if (stamp_data->note[0]) IMB_metadata_change_field(ibuf, "Note",        stamp_data->note);
-	if (stamp_data->date[0]) IMB_metadata_change_field(ibuf, "Date",        stamp_data->date);
-	if (stamp_data->marker[0]) IMB_metadata_change_field(ibuf, "Marker",    stamp_data->marker);
-	if (stamp_data->time[0]) IMB_metadata_change_field(ibuf, "Time",        stamp_data->time);
-	if (stamp_data->frame[0]) IMB_metadata_change_field(ibuf, "Frame",      stamp_data->frame);
-	if (stamp_data->camera[0]) IMB_metadata_change_field(ibuf, "Camera",    stamp_data->camera);
-	if (stamp_data->cameralens[0]) IMB_metadata_change_field(ibuf, "Lens",  stamp_data->cameralens);
-	if (stamp_data->scene[0]) IMB_metadata_change_field(ibuf, "Scene",      stamp_data->scene);
-	if (stamp_data->strip[0]) IMB_metadata_change_field(ibuf, "Strip",      stamp_data->strip);
-	if (stamp_data->rendertime[0]) IMB_metadata_change_field(ibuf, "RenderTime", stamp_data->rendertime);
+	BKE_stamp_info_callback(ibuf, stamp_data, metadata_change_field);
 }
+
 
 bool BKE_imbuf_alpha_test(ImBuf *ibuf)
 {
@@ -3350,9 +3396,11 @@ static ImBuf *load_image_single(
 		flag |= imbuf_alpha_flags_for_image(ima);
 
 		imapf = BLI_findlink(&ima->packedfiles, view_id);
-		ibuf = IMB_ibImageFromMemory(
-		       (unsigned char *)imapf->packedfile->data, imapf->packedfile->size, flag,
-		       ima->colorspace_settings.name, "<packed data>");
+		if (imapf->packedfile) {
+			ibuf = IMB_ibImageFromMemory(
+			       (unsigned char *)imapf->packedfile->data, imapf->packedfile->size, flag,
+			       ima->colorspace_settings.name, "<packed data>");
+		}
 	}
 	else {
 		ImageUser iuser_t;

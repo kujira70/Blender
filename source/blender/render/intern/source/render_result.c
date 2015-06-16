@@ -531,6 +531,10 @@ static const char *debug_pass_type_name_get(int debug_type)
 	switch (debug_type) {
 		case RENDER_PASS_DEBUG_BVH_TRAVERSAL_STEPS:
 			return "BVH Traversal Steps";
+		case RENDER_PASS_DEBUG_BVH_TRAVERSED_INSTANCES:
+			return "BVH Traversed Instances";
+		case RENDER_PASS_DEBUG_RAY_BOUNCES:
+			return "Ray Bounces";
 	}
 	return "Unknown";
 }
@@ -547,6 +551,7 @@ static RenderPass *render_layer_add_debug_pass(RenderResult *rr,
 	BLI_strncpy(rpass->name,
 	            debug_pass_type_name_get(debug_type),
 	            sizeof(rpass->name));
+	BLI_strncpy(rpass->internal_name, rpass->name, sizeof(rpass->internal_name));
 	return rpass;
 }
 #endif
@@ -702,7 +707,7 @@ RenderResult *render_result_new(Render *re, rcti *partrct, int crop, int savebuf
 #ifdef WITH_CYCLES_DEBUG
 			if (BKE_scene_use_new_shading_nodes(re->scene)) {
 				render_layer_add_debug_pass(rr, rl, 1, SCE_PASS_DEBUG,
-				        RENDER_PASS_DEBUG_BVH_TRAVERSAL_STEPS, view);
+				        re->r.debug_pass_type, view);
 			}
 #endif
 		}
@@ -1110,7 +1115,7 @@ bool RE_WriteRenderResult(ReportList *reports, RenderResult *rr, const char *fil
 
 	BLI_make_existing_file(filename);
 
-	if (IMB_exr_begin_write(exrhandle, filename, width, height, compress)) {
+	if (IMB_exr_begin_write(exrhandle, filename, width, height, compress, rr->stamp_data)) {
 		IMB_exr_write_channels(exrhandle);
 		success = true;
 	}

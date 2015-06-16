@@ -95,42 +95,11 @@ static bool opencl_kernel_use_advanced_shading(const string& platform)
 	else if(platform == "Apple")
 		return false;
 	else if(platform == "AMD Accelerated Parallel Processing")
-		return false;
+		return true;
 	else if(platform == "Intel(R) OpenCL")
 		return true;
 
 	return false;
-}
-
-static string opencl_kernel_build_options(const string& platform, const string *debug_src = NULL)
-{
-	string build_options = " -cl-fast-relaxed-math ";
-
-	if(platform == "NVIDIA CUDA")
-		build_options += "-D__KERNEL_OPENCL_NVIDIA__ -cl-nv-maxrregcount=32 -cl-nv-verbose ";
-
-	else if(platform == "Apple")
-		build_options += "-D__KERNEL_OPENCL_APPLE__ ";
-
-	else if(platform == "AMD Accelerated Parallel Processing")
-		build_options += "-D__KERNEL_OPENCL_AMD__ ";
-
-	else if(platform == "Intel(R) OpenCL") {
-		build_options += "-D__KERNEL_OPENCL_INTEL_CPU__ ";
-
-		/* options for gdb source level kernel debugging. this segfaults on linux currently */
-		if(opencl_kernel_use_debug() && debug_src)
-			build_options += "-g -s \"" + *debug_src + "\" ";
-	}
-
-	if(opencl_kernel_use_debug())
-		build_options += "-D__KERNEL_OPENCL_DEBUG__ ";
-
-#ifdef WITH_CYCLES_DEBUG
-	build_options += "-D__KERNEL_DEBUG__ ";
-#endif
-
-	return build_options;
 }
 
 /* thread safe cache for contexts and programs */
@@ -657,7 +626,7 @@ public:
 	                  const string *debug_src = NULL)
 	{
 		string build_options;
-		build_options = opencl_kernel_build_options(platform_name, debug_src) + custom_kernel_build_options;
+		build_options = kernel_build_options(debug_src) + custom_kernel_build_options;
 
 		ciErr = clBuildProgram(*kernel_program, 0, NULL, build_options.c_str(), NULL, NULL);
 
@@ -671,8 +640,11 @@ public:
 			clGetProgramBuildInfo(*kernel_program, cdDevice, CL_PROGRAM_BUILD_LOG, ret_val_size, &build_log[0], NULL);
 
 			build_log[ret_val_size] = '\0';
-			fprintf(stderr, "OpenCL kernel build output:\n");
-			fprintf(stderr, "%s\n", &build_log[0]);
+			/* Skip meaningless empty output from the NVidia compiler. */
+			if(!(ret_val_size == 2 && build_log[0] == '\n')) {
+				fprintf(stderr, "OpenCL kernel build output:\n");
+				fprintf(stderr, "%s\n", &build_log[0]);
+			}
 		}
 
 		if(ciErr != CL_SUCCESS) {
@@ -707,6 +679,10 @@ public:
 
 		double starttime = time_dt();
 		printf("Compiling OpenCL kernel ...\n");
+		/* TODO(sergey): Report which kernel is being compiled
+		 * as well (megakernel or which of split kernels etc..).
+		 */
+		printf("Build flags: %s\n", custom_kernel_build_options.c_str());
 
 		if(!build_kernel(kernel_program, custom_kernel_build_options, debug_src))
 			return false;
@@ -731,7 +707,7 @@ public:
 		md5.append((uint8_t*)name, strlen(name));
 		md5.append((uint8_t*)driver, strlen(driver));
 
-		string options = opencl_kernel_build_options(platform_name);
+		string options = kernel_build_options();
 		options += kernel_custom_build_options;
 		md5.append((uint8_t*)options.c_str(), options.size());
 
@@ -779,7 +755,7 @@ public:
 			}
 			else {
 
-				string init_kernel_source = "#include \"kernel.cl\" // " + kernel_md5 + "\n";
+				string init_kernel_source = "#include \"kernels/opencl/kernel.cl\" // " + kernel_md5 + "\n";
 
 				/* if does not exist or loading binary failed, compile kernel */
 				if(!compile_kernel(kernel_path, init_kernel_source, "", &cpProgram, debug_src))
@@ -1119,6 +1095,53 @@ public:
 	virtual void thread_run(DeviceTask * /*task*/) = 0;
 
 protected:
+
+	string kernel_build_options(const string *debug_src = NULL)
+	{
+		string build_options = " -cl-fast-relaxed-math ";
+
+		if(platform_name == "NVIDIA CUDA") {
+			build_options += "-D__KERNEL_OPENCL_NVIDIA__ "
+			                 "-cl-nv-maxrregcount=32 "
+			                 "-cl-nv-verbose ";
+
+			uint compute_capability_major, compute_capability_minor;
+			clGetDeviceInfo(cdDevice, CL_DEVICE_COMPUTE_CAPABILITY_MAJOR_NV,
+			                sizeof(cl_uint), &compute_capability_major, NULL);
+			clGetDeviceInfo(cdDevice, CL_DEVICE_COMPUTE_CAPABILITY_MINOR_NV,
+			                sizeof(cl_uint), &compute_capability_minor, NULL);
+
+			build_options += string_printf("-D__COMPUTE_CAPABILITY__=%u ",
+			                               compute_capability_major * 100 +
+			                               compute_capability_minor * 10);
+		}
+
+		else if(platform_name == "Apple")
+			build_options += "-D__KERNEL_OPENCL_APPLE__ ";
+
+		else if(platform_name == "AMD Accelerated Parallel Processing")
+			build_options += "-D__KERNEL_OPENCL_AMD__ ";
+
+		else if(platform_name == "Intel(R) OpenCL") {
+			build_options += "-D__KERNEL_OPENCL_INTEL_CPU__ ";
+
+			/* Options for gdb source level kernel debugging.
+			 * this segfaults on linux currently.
+			 */
+			if(opencl_kernel_use_debug() && debug_src)
+				build_options += "-g -s \"" + *debug_src + "\" ";
+		}
+
+		if(opencl_kernel_use_debug())
+			build_options += "-D__KERNEL_OPENCL_DEBUG__ ";
+
+#ifdef WITH_CYCLES_DEBUG
+		build_options += "-D__KERNEL_DEBUG__ ";
+#endif
+
+		return build_options;
+	}
+
 	class ArgumentWrapper {
 	public:
 		ArgumentWrapper() : size(0), pointer(NULL) {}
@@ -1239,6 +1262,31 @@ protected:
 			clReleaseProgram(program);
 		}
 	}
+
+	string build_options_from_requested_features(
+	        const DeviceRequestedFeatures& requested_features)
+	{
+		string build_options = "";
+		if(requested_features.experimental) {
+			build_options += " -D__KERNEL_EXPERIMENTAL__";
+		}
+		build_options += " -D__NODES_MAX_GROUP__=" +
+			string_printf("%d", requested_features.max_nodes_group);
+		build_options += " -D__NODES_FEATURES__=" +
+			string_printf("%d", requested_features.nodes_features);
+		build_options += string_printf(" -D__MAX_CLOSURE__=%d",
+		                               requested_features.max_closure);
+		if(!requested_features.use_hair) {
+			build_options += " -D__NO_HAIR__";
+		}
+		if(!requested_features.use_object_motion) {
+			build_options += " -D__NO_OBJECT_MOTION__";
+		}
+		if(!requested_features.use_camera_motion) {
+			build_options += " -D__NO_CAMERA_MOTION__";
+		}
+		return build_options;
+	}
 };
 
 class OpenCLDeviceMegaKernel : public OpenCLDeviceBase
@@ -1306,7 +1354,7 @@ public:
 				/* Kernel loaded from binary, nothing to do. */
 			}
 			else {
-				string init_kernel_source = "#include \"kernel.cl\" // " +
+				string init_kernel_source = "#include \"kernels/opencl/kernel.cl\" // " +
 				                            kernel_md5 + "\n";
 				/* If does not exist or loading binary failed, compile kernel. */
 				if(!compile_kernel(kernel_path,
@@ -1433,7 +1481,7 @@ public:
 };
 
 /* TODO(sergey): This is to keep tile split on OpenCL level working
- * for now, since withotu this viewport render does not work as it
+ * for now, since without this view-port render does not work as it
  * should.
  *
  * Ideally it'll be done on the higher level, but we need to get ready
@@ -1473,7 +1521,7 @@ public:
 		buffers = tile.buffers;
 	}
 
-	/* Split kernel is device global memory constained;
+	/* Split kernel is device global memory constrained;
 	 * hence split kernel cant render big tile size's in
 	 * one go. If the user sets a big tile size (big tile size
 	 * is a term relative to the available device global memory),
@@ -1498,11 +1546,11 @@ public:
 	cl_kernel ckPathTraceKernel_lamp_emission;
 	cl_kernel ckPathTraceKernel_queue_enqueue;
 	cl_kernel ckPathTraceKernel_background_buffer_update;
-	cl_kernel ckPathTraceKernel_shader_lighting;
+	cl_kernel ckPathTraceKernel_shader_eval;
 	cl_kernel ckPathTraceKernel_holdout_emission_blurring_pathtermination_ao;
 	cl_kernel ckPathTraceKernel_direct_lighting;
-	cl_kernel ckPathTraceKernel_shadow_blocked_direct_lighting;
-	cl_kernel ckPathTraceKernel_setup_next_iteration;
+	cl_kernel ckPathTraceKernel_shadow_blocked;
+	cl_kernel ckPathTraceKernel_next_iteration_setup;
 	cl_kernel ckPathTraceKernel_sum_all_radiance;
 
 	/* cl_program declaration. */
@@ -1512,7 +1560,7 @@ public:
 	cl_program queue_enqueue_program;
 	cl_program background_buffer_update_program;
 	cl_program shader_eval_program;
-	cl_program holdout_emission_blurring_termination_ao_program;
+	cl_program holdout_emission_blurring_pathtermination_ao_program;
 	cl_program direct_lighting_program;
 	cl_program shadow_blocked_program;
 	cl_program next_iteration_setup_program;
@@ -1520,7 +1568,7 @@ public:
 
 	/* Global memory variables [porting]; These memory is used for
 	 * co-operation between different kernels; Data written by one
-	 * kernel will be avaible to another kernel via this global
+	 * kernel will be available to another kernel via this global
 	 * memory.
 	 */
 	cl_mem rng_coop;
@@ -1569,16 +1617,21 @@ public:
 	cl_mem ray_depth_sd_DL_shadow;
 	cl_mem transparent_depth_sd;
 	cl_mem transparent_depth_sd_DL_shadow;
-#ifdef __RAY_DIFFERENTIALS__
+
+	/* Ray differentials. */
 	cl_mem dP_sd, dI_sd;
 	cl_mem dP_sd_DL_shadow, dI_sd_DL_shadow;
 	cl_mem du_sd, dv_sd;
 	cl_mem du_sd_DL_shadow, dv_sd_DL_shadow;
-#endif
-#ifdef __DPDU__
+
+	/* Dp/Du */
 	cl_mem dPdu_sd, dPdv_sd;
 	cl_mem dPdu_sd_DL_shadow, dPdv_sd_DL_shadow;
-#endif
+
+	/* Object motion. */
+	cl_mem ob_tfm_sd, ob_itfm_sd;
+	cl_mem ob_tfm_sd_DL_shadow, ob_itfm_sd_DL_shadow;
+
 	cl_mem closure_sd;
 	cl_mem closure_sd_DL_shadow;
 	cl_mem num_closure_sd;
@@ -1646,7 +1699,7 @@ public:
 #endif
 
 	/* clos_max value for which the kernels have been loaded currently. */
-	int current_clos_max;
+	int current_max_closure;
 
 	/* Marked True in constructor and marked false at the end of path_trace(). */
 	bool first_tile;
@@ -1654,8 +1707,6 @@ public:
 	OpenCLDeviceSplitKernel(DeviceInfo& info, Stats &stats, bool background_)
 	: OpenCLDeviceBase(info, stats, background_)
 	{
-
-		info.use_split_kernel = true;
 		background = background_;
 
 		/* Initialize kernels. */
@@ -1663,11 +1714,11 @@ public:
 		ckPathTraceKernel_scene_intersect = NULL;
 		ckPathTraceKernel_lamp_emission = NULL;
 		ckPathTraceKernel_background_buffer_update = NULL;
-		ckPathTraceKernel_shader_lighting = NULL;
+		ckPathTraceKernel_shader_eval = NULL;
 		ckPathTraceKernel_holdout_emission_blurring_pathtermination_ao = NULL;
 		ckPathTraceKernel_direct_lighting = NULL;
-		ckPathTraceKernel_shadow_blocked_direct_lighting = NULL;
-		ckPathTraceKernel_setup_next_iteration = NULL;
+		ckPathTraceKernel_shadow_blocked = NULL;
+		ckPathTraceKernel_next_iteration_setup = NULL;
 		ckPathTraceKernel_sum_all_radiance = NULL;
 		ckPathTraceKernel_queue_enqueue = NULL;
 
@@ -1678,7 +1729,7 @@ public:
 		queue_enqueue_program = NULL;
 		background_buffer_update_program = NULL;
 		shader_eval_program = NULL;
-		holdout_emission_blurring_termination_ao_program = NULL;
+		holdout_emission_blurring_pathtermination_ao_program = NULL;
 		direct_lighting_program = NULL;
 		shadow_blocked_program = NULL;
 		next_iteration_setup_program = NULL;
@@ -1719,7 +1770,8 @@ public:
 		ray_depth_sd_DL_shadow = NULL;
 		transparent_depth_sd = NULL;
 		transparent_depth_sd_DL_shadow = NULL;
-#ifdef __RAY_DIFFERENTIALS__
+
+		/* Ray differentials. */
 		dP_sd = NULL;
 		dI_sd = NULL;
 		dP_sd_DL_shadow = NULL;
@@ -1728,13 +1780,19 @@ public:
 		dv_sd = NULL;
 		du_sd_DL_shadow = NULL;
 		dv_sd_DL_shadow = NULL;
-#endif
-#ifdef __DPDU__
+
+		/* Dp/Du */
 		dPdu_sd = NULL;
 		dPdv_sd = NULL;
 		dPdu_sd_DL_shadow = NULL;
 		dPdv_sd_DL_shadow = NULL;
-#endif
+
+		/* Object motion. */
+		ob_tfm_sd = NULL;
+		ob_itfm_sd = NULL;
+		ob_tfm_sd_DL_shadow = NULL;
+		ob_itfm_sd_DL_shadow = NULL;
+
 		closure_sd = NULL;
 		closure_sd_DL_shadow = NULL;
 		num_closure_sd = NULL;
@@ -1784,7 +1842,7 @@ public:
 		work_pool_wgs = NULL;
 		max_work_groups = 0;
 #endif
-		current_clos_max = -1;
+		current_max_closure = -1;
 		first_tile = true;
 
 		/* Get device's maximum memory that can be allocated. */
@@ -1810,15 +1868,13 @@ public:
 	                       string kernel_init_source,
 	                       string clbin,
 	                       string custom_kernel_build_options,
-	                       cl_program *program)
+	                       cl_program *program,
+	                       const string *debug_src = NULL)
 	{
 		if(!opencl_version_check())
 			return false;
 
 		clbin = path_user_get(path_join("cache", clbin));
-
-		/* Path to preprocessed source for debugging. */
-		string *debug_src = NULL;
 
 		/* If exists already, try use it. */
 		if(path_exists(clbin) && load_binary(kernel_path,
@@ -1833,7 +1889,8 @@ public:
 			if(!compile_kernel(kernel_path,
 			                   kernel_init_source,
 			                   custom_kernel_build_options,
-			                   program))
+			                   program,
+			                   debug_src))
 			{
 				return false;
 			}
@@ -1865,7 +1922,7 @@ public:
 
 	size_t get_shader_closure_size(int max_closure)
 	{
-		return (sizeof(ShaderClosure)* max_closure);
+		return (sizeof(ShaderClosure) * max_closure);
 	}
 
 	size_t get_shader_data_size(size_t shader_closure_size)
@@ -1898,10 +1955,8 @@ public:
 	{
 		size_t shader_soa_size = 0;
 
-#define SD_VAR(type, what) \
-		shader_soa_size += sizeof(void *);
-#define SD_CLOSURE_VAR(type, what, max_closure)
-		shader_soa_size += sizeof(void *);
+#define SD_VAR(type, what) shader_soa_size += sizeof(void *);
+#define SD_CLOSURE_VAR(type, what, max_closure) shader_soa_size += sizeof(void *);
 		#include "kernel_shaderdata_vars.h"
 #undef SD_VAR
 #undef SD_CLOSURE_VAR
@@ -1911,23 +1966,6 @@ public:
 
 	bool load_kernels(const DeviceRequestedFeatures& requested_features)
 	{
-		/* If it is an interactive render; we ceil clos_max value to a multiple
-		 * of 5 in order to limit re-compilations.
-		 */
-		/* TODO(sergey): Decision about this should be done on higher levels. */
-		int max_closure = requested_features.max_closure;
-		if(!background) {
-			assert((max_closure != 0) && "clos_max value is 0" );
-			max_closure = (((max_closure - 1) / 5) + 1) * 5;
-			/* clos_max value shouldn't be greater than MAX_CLOSURE. */
-			max_closure = (max_closure > MAX_CLOSURE) ? MAX_CLOSURE : max_closure;
-			if(current_clos_max == max_closure) {
-				/* Present kernels have been created with the same closure count
-				 * build option.
-				 */
-				return true;
-			}
-		}
 		/* Get Shader, bake and film_convert kernels.
 		 * It'll also do verification of OpenCL actually initialized.
 		 */
@@ -1935,19 +1973,18 @@ public:
 			return false;
 		}
 
-		string svm_build_options = "";
-		string max_closure_build_option = "";
-		string compute_device_type_build_option = "";
+		string kernel_path = path_get("kernel");
+		string kernel_md5 = path_files_md5_hash(kernel_path);
+		string device_md5;
+		string kernel_init_source;
+		string clbin;
+		string clsrc, *debug_src = NULL;
 
-		/* Set svm_build_options. */
-		svm_build_options += " -D__NODES_MAX_GROUP__=" +
-			string_printf("%d", requested_features.max_nodes_group);
-		svm_build_options += " -D__NODES_FEATURES__=" +
-			string_printf("%d", requested_features.nodes_features);
-
-		/* Set max closure build option. */
-		max_closure_build_option += string_printf("-D__MAX_CLOSURE__=%d ",
-		                                          max_closure);
+		string build_options = "-D__SPLIT_KERNEL__";
+#ifdef __WORK_STEALING__
+		build_options += " -D__WORK_STEALING__";
+#endif
+		build_options += build_options_from_requested_features(requested_features);
 
 		/* Set compute device build option. */
 		cl_device_type device_type;
@@ -1958,84 +1995,73 @@ public:
 		                        NULL);
 		assert(ciErr == CL_SUCCESS);
 		if(device_type == CL_DEVICE_TYPE_GPU) {
-			compute_device_type_build_option = "-D__COMPUTE_DEVICE_GPU__ ";
+			build_options += " -D__COMPUTE_DEVICE_GPU__";
 		}
 
-		string kernel_path = path_get("kernel");
-		string kernel_md5 = path_files_md5_hash(kernel_path);
-		string device_md5;
-		string custom_kernel_build_options;
-		string kernel_init_source;
-		string clbin;
-
-		string common_custom_build_options = "";
-		common_custom_build_options += "-D__SPLIT_KERNEL__ ";
-		common_custom_build_options += max_closure_build_option;;
-#ifdef __WORK_STEALING__
-		common_custom_build_options += "-D__WORK_STEALING__ ";
-#endif
-
-#define LOAD_KERNEL(program, name) \
+#define GLUE(a, b) a ## b
+#define LOAD_KERNEL(name) \
 	do { \
-		kernel_init_source = "#include \"kernel_" name ".cl\" // " + \
+		kernel_init_source = "#include \"kernels/opencl/kernel_" #name ".cl\" // " + \
 		                     kernel_md5 + "\n"; \
-		custom_kernel_build_options = common_custom_build_options; \
-		device_md5 = device_md5_hash(custom_kernel_build_options); \
-		clbin = string_printf("cycles_kernel_%s_%s_" name ".clbin", \
+		device_md5 = device_md5_hash(build_options); \
+		clbin = string_printf("cycles_kernel_%s_%s_" #name ".clbin", \
 		                      device_md5.c_str(), kernel_md5.c_str()); \
+		if(opencl_kernel_use_debug()) { \
+			clsrc = string_printf("cycles_kernel_%s_%s_" #name ".cl", \
+			                      device_md5.c_str(), kernel_md5.c_str()); \
+			clsrc = path_user_get(path_join("cache", clsrc)); \
+			debug_src = &clsrc; \
+		} \
 		if(!load_split_kernel(kernel_path, kernel_init_source, clbin, \
-		                      custom_kernel_build_options, &program)) \
+		                      build_options, \
+		                      &GLUE(name, _program), \
+		                      debug_src)) \
 		{ \
+			fprintf(stderr, "Faled to compile %s\n", #name); \
 			return false; \
 		} \
 	} while(false)
 
-		/* TODO(sergey): If names are unified we can save some more bits of
-		 * code here.
-		 */
-		LOAD_KERNEL(data_init_program, "data_init");
-		LOAD_KERNEL(scene_intersect_program, "scene_intersect");
-		LOAD_KERNEL(lamp_emission_program, "lamp_emission");
-		LOAD_KERNEL(queue_enqueue_program, "queue_enqueue");
-		LOAD_KERNEL(background_buffer_update_program, "background_buffer_update");
-		LOAD_KERNEL(shader_eval_program, "shader_eval");
-		LOAD_KERNEL(holdout_emission_blurring_termination_ao_program,
-		            "holdout_emission_blurring_pathtermination_ao");
-		LOAD_KERNEL(direct_lighting_program, "direct_lighting");
-		LOAD_KERNEL(shadow_blocked_program, "shadow_blocked");
-		LOAD_KERNEL(next_iteration_setup_program, "next_iteration_setup");
-		LOAD_KERNEL(sum_all_radiance_program, "sum_all_radiance");
+		LOAD_KERNEL(data_init);
+		LOAD_KERNEL(scene_intersect);
+		LOAD_KERNEL(lamp_emission);
+		LOAD_KERNEL(queue_enqueue);
+		LOAD_KERNEL(background_buffer_update);
+		LOAD_KERNEL(shader_eval);
+		LOAD_KERNEL(holdout_emission_blurring_pathtermination_ao);
+		LOAD_KERNEL(direct_lighting);
+		LOAD_KERNEL(shadow_blocked);
+		LOAD_KERNEL(next_iteration_setup);
+		LOAD_KERNEL(sum_all_radiance);
 
 #undef LOAD_KERNEL
 
-#define GLUE(a, b) a ## b
-#define FIND_KERNEL(kernel, program, function) \
+#define FIND_KERNEL(name) \
 	do { \
-		GLUE(ckPathTraceKernel_, kernel) = \
-			clCreateKernel(GLUE(program, _program), \
-			               "kernel_ocl_path_trace_"  function, &ciErr); \
+		GLUE(ckPathTraceKernel_, name) = \
+			clCreateKernel(GLUE(name, _program), \
+			               "kernel_ocl_path_trace_"  #name, &ciErr); \
 		if(opencl_error(ciErr)) { \
+			fprintf(stderr,"Missing kernel kernel_ocl_path_trace_%s\n", #name); \
 			return false; \
 		} \
 	} while(false)
 
-		FIND_KERNEL(data_init, data_init, "data_initialization");
-		FIND_KERNEL(scene_intersect, scene_intersect, "scene_intersect");
-		FIND_KERNEL(lamp_emission, lamp_emission, "lamp_emission");
-		FIND_KERNEL(queue_enqueue, queue_enqueue, "queue_enqueue");
-		FIND_KERNEL(background_buffer_update, background_buffer_update, "background_buffer_update");
-		FIND_KERNEL(shader_lighting, shader_eval, "shader_evaluation");
-		FIND_KERNEL(holdout_emission_blurring_pathtermination_ao,
-		            holdout_emission_blurring_termination_ao,
-		            "holdout_emission_blurring_pathtermination_ao");
-		FIND_KERNEL(direct_lighting, direct_lighting, "direct_lighting");
-		FIND_KERNEL(shadow_blocked_direct_lighting, shadow_blocked, "shadow_blocked_direct_lighting");
-		FIND_KERNEL(setup_next_iteration, next_iteration_setup, "setup_next_iteration");
-		FIND_KERNEL(sum_all_radiance, sum_all_radiance, "sum_all_radiance");
+		FIND_KERNEL(data_init);
+		FIND_KERNEL(scene_intersect);
+		FIND_KERNEL(lamp_emission);
+		FIND_KERNEL(queue_enqueue);
+		FIND_KERNEL(background_buffer_update);
+		FIND_KERNEL(shader_eval);
+		FIND_KERNEL(holdout_emission_blurring_pathtermination_ao);
+		FIND_KERNEL(direct_lighting);
+		FIND_KERNEL(shadow_blocked);
+		FIND_KERNEL(next_iteration_setup);
+		FIND_KERNEL(sum_all_radiance);
 #undef FIND_KERNEL
 #undef GLUE
 
-		current_clos_max = max_closure;
+		current_max_closure = requested_features.max_closure;
 
 		return true;
 	}
@@ -2050,11 +2076,11 @@ public:
 		release_kernel_safe(ckPathTraceKernel_lamp_emission);
 		release_kernel_safe(ckPathTraceKernel_queue_enqueue);
 		release_kernel_safe(ckPathTraceKernel_background_buffer_update);
-		release_kernel_safe(ckPathTraceKernel_shader_lighting);
+		release_kernel_safe(ckPathTraceKernel_shader_eval);
 		release_kernel_safe(ckPathTraceKernel_holdout_emission_blurring_pathtermination_ao);
 		release_kernel_safe(ckPathTraceKernel_direct_lighting);
-		release_kernel_safe(ckPathTraceKernel_shadow_blocked_direct_lighting);
-		release_kernel_safe(ckPathTraceKernel_setup_next_iteration);
+		release_kernel_safe(ckPathTraceKernel_shadow_blocked);
+		release_kernel_safe(ckPathTraceKernel_next_iteration_setup);
 		release_kernel_safe(ckPathTraceKernel_sum_all_radiance);
 
 		/* Release global memory */
@@ -2088,7 +2114,8 @@ public:
 		release_mem_object_safe(ray_depth_sd_DL_shadow);
 		release_mem_object_safe(transparent_depth_sd);
 		release_mem_object_safe(transparent_depth_sd_DL_shadow);
-#ifdef __RAY_DIFFERENTIALS__
+
+		/* Ray differentials. */
 		release_mem_object_safe(dP_sd);
 		release_mem_object_safe(dP_sd_DL_shadow);
 		release_mem_object_safe(dI_sd);
@@ -2097,13 +2124,20 @@ public:
 		release_mem_object_safe(du_sd_DL_shadow);
 		release_mem_object_safe(dv_sd);
 		release_mem_object_safe(dv_sd_DL_shadow);
-#endif
-#ifdef __DPDU__
+
+		/* Dp/Du */
 		release_mem_object_safe(dPdu_sd);
 		release_mem_object_safe(dPdu_sd_DL_shadow);
 		release_mem_object_safe(dPdv_sd);
 		release_mem_object_safe(dPdv_sd_DL_shadow);
-#endif
+
+		/* Object motion. */
+		release_mem_object_safe(ob_tfm_sd);
+		release_mem_object_safe(ob_itfm_sd);
+
+		release_mem_object_safe(ob_tfm_sd_DL_shadow);
+		release_mem_object_safe(ob_itfm_sd_DL_shadow);
+
 		release_mem_object_safe(closure_sd);
 		release_mem_object_safe(closure_sd_DL_shadow);
 		release_mem_object_safe(num_closure_sd);
@@ -2152,7 +2186,7 @@ public:
 		release_program_safe(queue_enqueue_program);
 		release_program_safe(background_buffer_update_program);
 		release_program_safe(shader_eval_program);
-		release_program_safe(holdout_emission_blurring_termination_ao_program);
+		release_program_safe(holdout_emission_blurring_pathtermination_ao_program);
 		release_program_safe(direct_lighting_program);
 		release_program_safe(shadow_blocked_program);
 		release_program_safe(next_iteration_setup_program);
@@ -2212,7 +2246,7 @@ public:
 		 */
 		if(num_parallel_samples >= 64) {
 			/* TODO(sergey): Could use generic round-up here. */
-			num_parallel_samples = (num_parallel_samples / 64) * 64
+			num_parallel_samples = (num_parallel_samples / 64) * 64;
 		}
 		assert(num_parallel_samples != 0);
 
@@ -2229,7 +2263,7 @@ public:
 			/* TODO(sergey): This will actually over-allocate if
 			 * particular kernel does not support multiclosure.
 			 */
-			size_t ShaderClosure_size = get_shader_closure_size(current_clos_max);
+			size_t ShaderClosure_size = get_shader_closure_size(current_max_closure);
 
 #ifdef __WORK_STEALING__
 			/* Calculate max groups */
@@ -2283,7 +2317,7 @@ public:
 			transparent_depth_sd = mem_alloc(num_global_elements * sizeof(int));
 			transparent_depth_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(int));
 
-#ifdef __RAY_DIFFERENTIALS__
+			/* Ray differentials. */
 			dP_sd = mem_alloc(num_global_elements * sizeof(differential3));
 			dP_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(differential3));
 			dI_sd = mem_alloc(num_global_elements * sizeof(differential3));
@@ -2292,14 +2326,19 @@ public:
 			du_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(differential));
 			dv_sd = mem_alloc(num_global_elements * sizeof(differential));
 			dv_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(differential));
-#endif
 
-#ifdef __DPDU__
+			/* Dp/Du */
 			dPdu_sd = mem_alloc(num_global_elements * sizeof(float3));
 			dPdu_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(float3));
 			dPdv_sd = mem_alloc(num_global_elements * sizeof(float3));
 			dPdv_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(float3));
-#endif
+
+			/* Object motion. */
+			ob_tfm_sd = mem_alloc(num_global_elements * sizeof(Transform));
+			ob_tfm_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(Transform));
+			ob_itfm_sd = mem_alloc(num_global_elements * sizeof(Transform));
+			ob_itfm_sd_DL_shadow = mem_alloc(num_global_elements * 2 * sizeof(Transform));
+
 			closure_sd = mem_alloc(num_global_elements * ShaderClosure_size);
 			closure_sd_DL_shadow = mem_alloc(num_global_elements * 2 * ShaderClosure_size);
 			num_closure_sd = mem_alloc(num_global_elements * sizeof(int));
@@ -2385,10 +2424,10 @@ public:
 			                transparent_depth_sd,
 			                transparent_depth_sd_DL_shadow);
 
+		/* Ray differentials. */
 		start_arg_index +=
 			kernel_set_args(ckPathTraceKernel_data_init,
 			                start_arg_index,
-#ifdef __RAY_DIFFERENTIALS__
 			                dP_sd,
 			                dP_sd_DL_shadow,
 			                dI_sd,
@@ -2396,14 +2435,29 @@ public:
 			                du_sd,
 			                du_sd_DL_shadow,
 			                dv_sd,
-			                dv_sd_DL_shadow,
-#endif
-#ifdef __DPDU__
+			                dv_sd_DL_shadow);
+
+		/* Dp/Du */
+		start_arg_index +=
+			kernel_set_args(ckPathTraceKernel_data_init,
+			                start_arg_index,
 			                dPdu_sd,
 			                dPdu_sd_DL_shadow,
 			                dPdv_sd,
-			                dPdv_sd_DL_shadow,
-#endif
+			                dPdv_sd_DL_shadow);
+
+		/* Object motion. */
+		start_arg_index +=
+			kernel_set_args(ckPathTraceKernel_data_init,
+			                start_arg_index,
+			                ob_tfm_sd,
+			                ob_tfm_sd_DL_shadow,
+			                ob_itfm_sd,
+			                ob_itfm_sd_DL_shadow);
+
+		start_arg_index +=
+			kernel_set_args(ckPathTraceKernel_data_init,
+			                start_arg_index,
 			                closure_sd,
 			                closure_sd_DL_shadow,
 			                num_closure_sd,
@@ -2541,7 +2595,7 @@ public:
 #endif
 		                 num_parallel_samples);
 
-		kernel_set_args(ckPathTraceKernel_shader_lighting,
+		kernel_set_args(ckPathTraceKernel_shader_eval,
 		                0,
 		                kgbuffer,
 		                d_data,
@@ -2601,7 +2655,7 @@ public:
 		                Queue_index,
 		                dQueue_size);
 
-		kernel_set_args(ckPathTraceKernel_shadow_blocked_direct_lighting,
+		kernel_set_args(ckPathTraceKernel_shadow_blocked,
 		                0,
 		                kgbuffer,
 		                d_data,
@@ -2617,7 +2671,7 @@ public:
 		                dQueue_size,
 		                total_num_rays);
 
-		kernel_set_args(ckPathTraceKernel_setup_next_iteration,
+		kernel_set_args(ckPathTraceKernel_next_iteration_setup,
 		                0,
 		                kgbuffer,
 		                d_data,
@@ -2687,11 +2741,11 @@ public:
 				ENQUEUE_SPLIT_KERNEL(lamp_emission, global_size, local_size);
 				ENQUEUE_SPLIT_KERNEL(queue_enqueue, global_size, local_size);
 				ENQUEUE_SPLIT_KERNEL(background_buffer_update, global_size, local_size);
-				ENQUEUE_SPLIT_KERNEL(shader_lighting, global_size, local_size);
+				ENQUEUE_SPLIT_KERNEL(shader_eval, global_size, local_size);
 				ENQUEUE_SPLIT_KERNEL(holdout_emission_blurring_pathtermination_ao, global_size, local_size);
 				ENQUEUE_SPLIT_KERNEL(direct_lighting, global_size, local_size);
-				ENQUEUE_SPLIT_KERNEL(shadow_blocked_direct_lighting, global_size_shadow_blocked, local_size);
-				ENQUEUE_SPLIT_KERNEL(setup_next_iteration, global_size, local_size);
+				ENQUEUE_SPLIT_KERNEL(shadow_blocked, global_size_shadow_blocked, local_size);
+				ENQUEUE_SPLIT_KERNEL(next_iteration_setup, global_size, local_size);
 			}
 
 			/* Read ray-state into Host memory to decide if we should exit
@@ -2854,7 +2908,7 @@ public:
 	{
 		size_t shader_closure_size = 0;
 		size_t shaderdata_volume = 0;
-		shader_closure_size = get_shader_closure_size(current_clos_max);
+		shader_closure_size = get_shader_closure_size(current_max_closure);
 		/* TODO(sergey): This will actually over-allocate if
 		 * particular kernel does not support multiclosure.
 		 */
@@ -3270,7 +3324,7 @@ Device *device_opencl_create(DeviceInfo& info, Stats &stats, bool background)
 		const bool force_split_kernel =
 			getenv("CYCLES_OPENCL_SPLIT_KERNEL_TEST") != NULL;
 		/* TODO(sergey): Replace string lookups with more enum-like API,
-		 * similar to device/venfdor checks blender's gpu.
+		 * similar to device/vendor checks blender's gpu.
 		 */
 		if(force_split_kernel ||
 		   (platform_name == "AMD Accelerated Parallel Processing" &&
@@ -3278,17 +3332,18 @@ Device *device_opencl_create(DeviceInfo& info, Stats &stats, bool background)
 		{
 			/* If the device is an AMD GPU, take split kernel path. */
 			VLOG(1) << "Using split kernel";
+			info.use_split_kernel = true;
 			return new OpenCLDeviceSplitKernel(info, stats, background);
 		} else {
 			/* For any other device, take megakernel path. */
-			VLOG(1) << "Using megekernel";
+			VLOG(1) << "Using mega kernel";
 			return new OpenCLDeviceMegaKernel(info, stats, background);
 		}
 	} else {
 		/* If we can't retrieve platform and device type information for some
 		 * reason, we default to megakernel path.
 		 */
-		VLOG(1) << "Failed to rertieve platform or device, using megakernel";
+		VLOG(1) << "Failed to retrieve platform or device, using mega kernel";
 		return new OpenCLDeviceMegaKernel(info, stats, background);
 	}
 }
@@ -3367,7 +3422,7 @@ void device_opencl_info(vector<DeviceInfo>& devices)
 			DeviceInfo info;
 
 			info.type = DEVICE_OPENCL;
-			info.description = string(name);
+			info.description = string_remove_trademark(string(name));
 			info.num = num_base + num;
 			info.id = string_printf("OPENCL_%d", info.num);
 			/* we don't know if it's used for display, but assume it is */
@@ -3382,8 +3437,77 @@ void device_opencl_info(vector<DeviceInfo>& devices)
 
 string device_opencl_capabilities(void)
 {
-	/* TODO(sergey): Not implemented yet. */
-	return "";
+	string result = "";
+	string error_msg = "";  /* Only used by opencl_assert(), but in the future
+	                         * it could also be nicely reported to the console.
+	                         */
+	cl_uint num_platforms = 0;
+	opencl_assert(clGetPlatformIDs(0, NULL, &num_platforms));
+	if(num_platforms == 0) {
+		return "No OpenCL platforms found\n";
+	}
+	result += string_printf("Number of platforms: %d\n", num_platforms);
+
+	vector<cl_platform_id> platform_ids;
+	platform_ids.resize(num_platforms);
+	opencl_assert(clGetPlatformIDs(num_platforms, &platform_ids[0], NULL));
+
+#define APPEND_STRING_INFO(func, id, name, what) \
+	do { \
+		char data[1024] = "\0"; \
+		opencl_assert(func(id, what, sizeof(data), &data, NULL)); \
+		result += string_printf("%s: %s\n", name, data); \
+	} while(false)
+#define APPEND_PLATFORM_STRING_INFO(id, name, what) \
+	APPEND_STRING_INFO(clGetPlatformInfo, id, "\tPlatform " name, what)
+#define APPEND_DEVICE_STRING_INFO(id, name, what) \
+	APPEND_STRING_INFO(clGetDeviceInfo, id, "\t\t\tDevice " name, what)
+
+	vector<cl_device_id> device_ids;
+	for (cl_uint platform = 0; platform < num_platforms; ++platform) {
+		cl_platform_id platform_id = platform_ids[platform];
+
+		result += string_printf("Platform #%d\n", platform);
+
+		APPEND_PLATFORM_STRING_INFO(platform_id, "Name", CL_PLATFORM_NAME);
+		APPEND_PLATFORM_STRING_INFO(platform_id, "Vendor", CL_PLATFORM_VENDOR);
+		APPEND_PLATFORM_STRING_INFO(platform_id, "Version", CL_PLATFORM_VERSION);
+		APPEND_PLATFORM_STRING_INFO(platform_id, "Profile", CL_PLATFORM_PROFILE);
+		APPEND_PLATFORM_STRING_INFO(platform_id, "Extensions", CL_PLATFORM_EXTENSIONS);
+
+		cl_uint num_devices = 0;
+		opencl_assert(clGetDeviceIDs(platform_ids[platform],
+		                             CL_DEVICE_TYPE_ALL,
+		                             0,
+		                             NULL,
+		                             &num_devices));
+		result += string_printf("\tNumber of devices: %d\n", num_devices);
+
+		device_ids.resize(num_devices);
+		opencl_assert(clGetDeviceIDs(platform_ids[platform],
+		                             CL_DEVICE_TYPE_ALL,
+		                             num_devices,
+		                             &device_ids[0],
+		                             NULL));
+		for (cl_uint device = 0; device < num_devices; ++device) {
+			cl_device_id device_id = device_ids[device];
+
+			result += string_printf("\t\tDevice: #%d\n", device);
+
+			APPEND_DEVICE_STRING_INFO(device_id, "Name", CL_DEVICE_NAME);
+			APPEND_DEVICE_STRING_INFO(device_id, "Vendor", CL_DEVICE_VENDOR);
+			APPEND_DEVICE_STRING_INFO(device_id, "OpenCL C Version", CL_DEVICE_OPENCL_C_VERSION);
+			APPEND_DEVICE_STRING_INFO(device_id, "Profile", CL_DEVICE_PROFILE);
+			APPEND_DEVICE_STRING_INFO(device_id, "Version", CL_DEVICE_VERSION);
+			APPEND_DEVICE_STRING_INFO(device_id, "Extensions", CL_DEVICE_EXTENSIONS);
+		}
+	}
+
+#undef APPEND_STRING_INFO
+#undef APPEND_PLATFORM_STRING_INFO
+#undef APPEND_DEVICE_STRING_INFO
+
+	return result;
 }
 
 CCL_NAMESPACE_END

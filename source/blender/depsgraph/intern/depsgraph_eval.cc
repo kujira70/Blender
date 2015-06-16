@@ -22,8 +22,12 @@
  * Contributor(s): None Yet
  *
  * ***** END GPL LICENSE BLOCK *****
+ */
+
+/** \file blender/depsgraph/intern/depsgraph_eval.cc
+ *  \ingroup depsgraph
  *
- * Evaluation engine entrypoints for Depsgraph Engine
+ * Evaluation engine entrypoints for Depsgraph Engine.
  */
 
 #include "MEM_guardedalloc.h"
@@ -321,6 +325,10 @@ void DEG_evaluate_on_refresh_ex(EvaluationContext *eval_ctx,
 	TaskScheduler *task_scheduler = BLI_task_scheduler_get();
 	TaskPool *task_pool = BLI_task_pool_create(task_scheduler, &state);
 
+	if (G.debug & G_DEBUG_DEPSGRAPH_NO_THREADS) {
+		BLI_pool_set_num_threads(task_pool, 1);
+	}
+
 	calculate_pending_parents(graph, layers);
 
 	/* Clear tags. */
@@ -361,7 +369,7 @@ void DEG_evaluate_on_refresh(EvaluationContext *eval_ctx,
 {
 	/* Update time on primary timesource. */
 	TimeSourceDepsNode *tsrc = graph->find_time_source();
-	tsrc->cfra = BKE_scene_frame_get(scene);;
+	tsrc->cfra = BKE_scene_frame_get(scene);
 
 	DEG_evaluate_on_refresh_ex(eval_ctx, graph, graph->layers);
 }

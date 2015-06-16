@@ -293,7 +293,7 @@ bool id_make_local(ID *id, bool test)
 
 /**
  * Invokes the appropriate copy method for the block and returns the result in
- * newid, unless test. Returns true iff the block can be copied.
+ * newid, unless test. Returns true if the block can be copied.
  */
 bool id_copy(ID *id, ID **newid, bool test)
 {
@@ -1421,6 +1421,15 @@ void id_clear_lib_data(Main *bmain, ID *id)
 	if (ntree) {
 		ntree->id.lib = NULL;
 	}
+
+	if (GS(id->name) == ID_OB) {
+		Object *object = (Object *)id;
+		if (object->proxy_from != NULL) {
+			object->proxy_from->proxy = NULL;
+			object->proxy_from->proxy_group = NULL;
+		}
+		object->proxy = object->proxy_from = object->proxy_group = NULL;
+	}
 }
 
 /* next to indirect usage in read/writefile also in editobject.c scene.c */
@@ -1610,7 +1619,7 @@ void rename_id(ID *id, const char *name)
 void name_uiprefix_id(char *name, const ID *id)
 {
 	name[0] = id->lib ? 'L' : ' ';
-	name[1] = id->flag & LIB_FAKEUSER ? 'F' : (id->us == 0) ? '0' : ' ';
+	name[1] = (id->flag & LIB_FAKEUSER) ? 'F' : ((id->us == 0) ? '0' : ' ');
 	name[2] = ' ';
 
 	strcpy(name + 3, id->name + 2);

@@ -44,6 +44,7 @@
 #include "BKE_context.h"
 #include "BKE_screen.h"
 #include "BKE_global.h"
+#include "BKE_node.h"
 #include "BKE_text.h" /* for UI_OT_reports_to_text */
 #include "BKE_report.h"
 
@@ -278,13 +279,48 @@ bool UI_context_copy_to_selected_list(
 	else if (RNA_struct_is_a(ptr->type, &RNA_Sequence)) {
 		*r_lb = CTX_data_collection_get(C, "selected_editable_sequences");
 	}
-	else if (RNA_struct_is_a(ptr->type, &RNA_Node)) {
-		*r_lb = CTX_data_collection_get(C, "selected_nodes");
-	}
-	else if (RNA_struct_is_a(ptr->type, &RNA_NodeSocket)) {
-		if ((*r_path = RNA_path_resolve_from_type_to_property(ptr, prop, &RNA_Node)) != NULL) {
-			*r_lb = CTX_data_collection_get(C, "selected_nodes");
+	else if (RNA_struct_is_a(ptr->type, &RNA_Node) ||
+	         RNA_struct_is_a(ptr->type, &RNA_NodeSocket))
+	{
+		ListBase lb = {NULL, NULL};
+		char *path = NULL;
+		bNode *node = NULL;
+
+		/* Get the node we're editing */
+		if (RNA_struct_is_a(ptr->type, &RNA_NodeSocket)) {
+			bNodeTree *ntree = ptr->id.data;
+			bNodeSocket *sock = ptr->data;
+			if (nodeFindNode(ntree, sock, &node, NULL)) {
+				if ((path = RNA_path_resolve_from_type_to_property(ptr, prop, &RNA_Node)) != NULL) {
+					/* we're good! */
+				}
+				else {
+					node = NULL;
+				}
+			}
 		}
+		else {
+			node = ptr->data;
+		}
+
+		/* Now filter by type */
+		if (node) {
+			CollectionPointerLink *link, *link_next;
+			lb = CTX_data_collection_get(C, "selected_nodes");
+
+			for (link = lb.first; link; link = link_next) {
+				bNode *node_data = link->ptr.data;
+				link_next = link->next;
+
+				if (node_data->type != node->type) {
+					BLI_remlink(&lb, link);
+					MEM_freeN(link);
+				}
+			}
+		}
+
+		*r_lb = lb;
+		*r_path = path;
 	}
 	else if (ptr->id.data) {
 		ID *id = ptr->id.data;
@@ -329,7 +365,10 @@ bool UI_context_copy_to_selected_list(
 						/* avoid prepending 'data' to the path */
 						RNA_id_pointer_create(id_data, &link->ptr);
 					}
-					id_data->flag &= ~LIB_DOIT;
+
+					if (id_data) {
+						id_data->flag &= ~LIB_DOIT;
+					}
 				}
 			}
 
@@ -720,10 +759,12 @@ static void UI_OT_editsource(wmOperatorType *ot)
 }
 
 /* ------------------------------------------------------------------------- */
-/* EditTranslation utility funcs and operator,
- * Note: this includes utility functions and button matching checks.
- *       this only works in conjunction with a py operator! */
 
+/**
+ * EditTranslation utility funcs and operator,
+ * \note: this includes utility functions and button matching checks.
+ * this only works in conjunction with a py operator!
+ */
 static void edittranslation_find_po_file(const char *root, const char *uilng, char *path, const size_t maxlen)
 {
 	char tstr[32]; /* Should be more than enough! */

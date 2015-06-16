@@ -25,9 +25,12 @@ import bpy
 
 def enum_previews_from_directory_items(self, context):
     """EnumProperty callback"""
-    wm = context.window_manager
-
     enum_items = []
+
+    if context is None:
+        return enum_items
+
+    wm = context.window_manager
     directory = wm.my_previews_dir
 
     # Get the preview collection (defined in register func).
@@ -41,7 +44,7 @@ def enum_previews_from_directory_items(self, context):
     if directory and os.path.exists(directory):
         # Scan the directory for png files
         image_paths = []
-        for fn in  os.listdir(directory):
+        for fn in os.listdir(directory):
             if fn.lower().endswith(".png"):
                 image_paths.append(fn)
 

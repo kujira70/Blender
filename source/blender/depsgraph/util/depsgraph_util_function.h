@@ -20,6 +20,12 @@
  *
  * Original Author: Lukas Toenne
  * Contributor(s): 
+ *
+ * ***** END GPL LICENSE BLOCK *****
+ */
+
+/** \file blender/depsgraph/util/depsgraph_util_function.h
+ *  \ingroup depsgraph
  */
 
 #ifndef __DEPSGRAPH_UTIL_FUNCTION_H__
@@ -103,4 +109,4 @@ void *function_bind(T func,
 
 #endif
 
-#endif  /* __DEPSGRAPH_UTIL_SET_H__ */
+#endif  /* __DEPSGRAPH_UTIL_FUNCTION_H__ */
