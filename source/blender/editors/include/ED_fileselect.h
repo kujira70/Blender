@@ -33,7 +33,6 @@
 
 struct ARegion;
 struct FileSelectParams;
-struct ScrArea;
 struct SpaceFile;
 struct bContext;
 struct wmWindowManager;
@@ -41,13 +40,17 @@ struct wmWindowManager;
 #define FILE_LAYOUT_HOR 1
 #define FILE_LAYOUT_VER 2
 
-#define MAX_FILE_COLUMN 4
+#define MAX_FILE_COLUMN 8
 
 typedef enum FileListColumns {
 	COLUMN_NAME = 0,
 	COLUMN_DATE,
 	COLUMN_TIME,
 	COLUMN_SIZE,
+	COLUMN_MODE1,
+	COLUMN_MODE2,
+	COLUMN_MODE3,
+	COLUMN_OWNER
 } FileListColumns;
 
 typedef struct FileLayout {
@@ -68,9 +71,6 @@ typedef struct FileLayout {
 	int dirty;
 	int textheight;
 	float column_widths[MAX_FILE_COLUMN];
-
-	/* When we change display size, we may have to update static strings like size of files... */
-	short curr_size;
 } FileLayout;
 
 typedef struct FileSelection {
@@ -100,9 +100,9 @@ void ED_fileselect_layout_tilepos(FileLayout *layout, int tile, int *x, int *y);
 
 void ED_operatormacros_file(void);
 
-void ED_fileselect_clear(struct wmWindowManager *wm, struct ScrArea *sa, struct SpaceFile *sfile);
+void ED_fileselect_clear(struct wmWindowManager *wm, struct SpaceFile *sfile);
 
-void ED_fileselect_exit(struct wmWindowManager *wm, struct ScrArea *sa, struct SpaceFile *sfile);
+void ED_fileselect_exit(struct wmWindowManager *wm, struct SpaceFile *sfile);
 
 int ED_file_extension_icon(const char *relname);
 
