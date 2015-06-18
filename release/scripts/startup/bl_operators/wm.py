@@ -26,6 +26,7 @@ from bpy.props import (
         IntProperty,
         FloatProperty,
         EnumProperty,
+        CollectionProperty,
         )
 
 from bpy.app.translations import pgettext_tip as tip_
