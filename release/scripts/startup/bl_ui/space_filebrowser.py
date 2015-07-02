@@ -40,23 +40,22 @@ class FILEBROWSER_HT_header(Header):
         row.operator("file.parent", text="", icon='FILE_PARENT')
         row.operator("file.refresh", text="", icon='FILE_REFRESH')
 
-        layout.separator()
+        row = layout.row()
+        row.separator()
+
+        row = layout.row(align=True)
         layout.operator_context = 'EXEC_DEFAULT'
-        layout.operator("file.directory_new", icon='NEWFOLDER', text="")
-        layout.separator()
+        row.operator("file.directory_new", icon='NEWFOLDER')
 
         layout.operator_context = 'INVOKE_DEFAULT'
         params = st.params
 
         # can be None when save/reload with a file selector open
         if params:
-            is_lib_browser = params.use_library_browsing
-
-            layout.prop(params, "recursion_level", text="")
-
             layout.prop(params, "display_type", expand=True, text="")
 
-            layout.prop(params, "thumbnail_size", text="")
+            if params.display_type == 'FILE_IMGDISPLAY':
+                layout.prop(params, "thumbnail_size", text="")
 
             layout.prop(params, "sort_method", expand=True, text="")
 
@@ -82,16 +81,8 @@ class FILEBROWSER_HT_header(Header):
                 row.prop(params, "use_filter_sound", text="")
                 row.prop(params, "use_filter_text", text="")
 
-            if is_lib_browser:
-                row.prop(params, "use_filter_blendid", text="")
-                if params.use_filter_blendid:
-                    row.separator()
-                    row.prop(params, "filter_id", text="")
-
             row.separator()
             row.prop(params, "filter_search", text="", icon='VIEWZOOM')
-
-        layout.template_running_jobs()
 
 
 class FILEBROWSER_UL_dir(bpy.types.UIList):

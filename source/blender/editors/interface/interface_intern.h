@@ -129,11 +129,6 @@ typedef enum uiButExtraIconType {
 	UI_BUT_ICONEXTRA_EYEDROPPER,
 } uiButExtraIconType;
 
-/* uiBut->dragflag */
-enum {
-	UI_BUT_DRAGPOIN_FREE = (1 << 0),
-};
-
 /* but->pie_dir */
 typedef enum RadialDirection {
 	UI_RADIAL_NONE  = -1,
@@ -302,7 +297,6 @@ struct uiBut {
 
 	/* Draggable data, type is WM_DRAG_... */
 	char dragtype;
-	short dragflag;
 	void *dragpoin;
 	struct ImBuf *imb;
 	float imb_scale;
