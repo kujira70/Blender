@@ -259,8 +259,10 @@ ccl_device void camera_sample_panorama(KernelGlobals *kg, float raster_x, float 
 	}
 #endif
 
-	ray->P = transform_point(&cameratoworld, ray->P);
-	ray->D = transform_direction(&cameratoworld, ray->D);
+	float3 tP = transform_point(&cameratoworld, ray->P);
+	float3 tD = transform_direction(&cameratoworld, ray->D);
+	ray->P = panorama_stereo_position(kg, tD, tP);
+	ray->D = panorama_stereo_direction(kg, tD, tP, ray->P);
 	ray->D = normalize(ray->D);
 
 #ifdef __RAY_DIFFERENTIALS__
@@ -270,11 +272,15 @@ ccl_device void camera_sample_panorama(KernelGlobals *kg, float raster_x, float 
 	Pcamera = transform_perspective(&rastertocamera, make_float3(raster_x, raster_y, 0.0f));
 	float3 Ddiff = normalize(transform_direction(&cameratoworld, panorama_to_direction(kg, Pcamera.x, Pcamera.y)));
 
-	Pcamera = transform_perspective(&rastertocamera, make_float3(raster_x + 1.0f, raster_y, 0.0f));
-	ray->dD.dx = normalize(transform_direction(&cameratoworld, panorama_to_direction(kg, Pcamera.x, Pcamera.y))) - Ddiff;
+	tP = transform_perspective(&rastertocamera, make_float3(raster_x + 1.0f, raster_y, 0.0f));
+	tD = transform_direction(&cameratoworld, panorama_to_direction(kg, Pcamera.x, Pcamera.y));
+	Pcamera = panorama_stereo_position(kg, tD, tP);
+	ray->dD.dx = normalize(panorama_stereo_direction(kg, tD, tP, Pcamera)) - Ddiff;
 
-	Pcamera = transform_perspective(&rastertocamera, make_float3(raster_x, raster_y + 1.0f, 0.0f));
-	ray->dD.dy = normalize(transform_direction(&cameratoworld, panorama_to_direction(kg, Pcamera.x, Pcamera.y))) - Ddiff;
+	tP = transform_perspective(&rastertocamera, make_float3(raster_x, raster_y + 1.0f, 0.0f));
+	tD = transform_direction(&cameratoworld, panorama_to_direction(kg, Pcamera.x, Pcamera.y));
+	Pcamera = panorama_stereo_position(kg, tD, tP);
+	ray->dD.dy = normalize(panorama_stereo_direction(kg, tD, tP, Pcamera)) - Ddiff;
 #endif
 }
 
