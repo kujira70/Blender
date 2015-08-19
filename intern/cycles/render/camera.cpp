@@ -53,9 +53,6 @@ Camera::Camera()
 	longitude_min = -M_PI_F;
 	longitude_max = M_PI_F;
 	fov = M_PI_4_F;
-	stereo_eye = STEREO_NONE;
-	interocular_distance = 0.065f;
-	convergence_distance = 30.0f * 0.065f;
 
 	sensorwidth = 0.036f;
 	sensorheight = 0.024f;
@@ -290,10 +287,6 @@ void Camera::device_update(Device *device, DeviceScene *dscene, Scene *scene)
 	kcam->equirectangular_range = make_float4(longitude_min - longitude_max, -longitude_min,
 	                                          latitude_min -  latitude_max, -latitude_min + M_PI_2_F);
 
-	kcam->stereo_eye = stereo_eye;
-	kcam->interocular_distance = interocular_distance;
-	kcam->convergence_distance = convergence_distance;
-
 	/* sensor size */
 	kcam->sensorwidth = sensorwidth;
 	kcam->sensorheight = sensorheight;
@@ -371,8 +364,7 @@ bool Camera::modified(const Camera& cam)
 		(latitude_min == cam.latitude_min) &&
 		(latitude_max == cam.latitude_max) &&
 		(longitude_min == cam.longitude_min) &&
-		(longitude_max == cam.longitude_max) &&
-		(stereo_eye == cam.stereo_eye));
+		(longitude_max == cam.longitude_max));
 }
 
 bool Camera::motion_modified(const Camera& cam)
@@ -425,30 +417,9 @@ BoundBox Camera::viewplane_bounds_get()
 	BoundBox bounds = BoundBox::empty;
 
 	if(type == CAMERA_PANORAMA) {
-		if(use_spherical_stereo == false){
-			bounds.grow(make_float3(cameratoworld.w.x,
-			                        cameratoworld.w.y,
-			                        cameratoworld.w.z));
-		}
-		else {
-			float half_eye_distance = interocular_distance * 0.5f;
-
-			bounds.grow(make_float3(cameratoworld.w.x + half_eye_distance,
-			                        cameratoworld.w.y,
-			                        cameratoworld.w.z));
-
-			bounds.grow(make_float3(cameratoworld.w.x,
-			                        cameratoworld.w.y + half_eye_distance,
-			                        cameratoworld.w.z));
-
-			bounds.grow(make_float3(cameratoworld.w.x - half_eye_distance,
-			                        cameratoworld.w.y,
-			                        cameratoworld.w.z));
-
-			bounds.grow(make_float3(cameratoworld.w.x,
-			                        cameratoworld.w.y - half_eye_distance,
-			                        cameratoworld.w.z));
-		}
+		bounds.grow(make_float3(cameratoworld.w.x,
+		                        cameratoworld.w.y,
+		                        cameratoworld.w.z));
 	}
 	else {
 		bounds.grow(transform_raster_to_world(0.0f, 0.0f));
