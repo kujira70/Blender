@@ -773,10 +773,8 @@ typedef struct AssetUUIDList {
 typedef struct FileDirEntryRevision {
 	struct FileDirEntryRevision *next, *prev;
 
-	char *comment;
-	void *pad;
-
 	int uuid[4];
+	char *comment;
 
 	uint64_t size;
 	int64_t time;
